@@ -1,0 +1,150 @@
+import os 
+import smtplib 
+from email.message import EmailMessage 
+import pandas as pd 
+from tkinter import Tk, Label, Entry, Button, filedialog, messagebox, Text 
+from tkinter import ttk 
+import csv 
+import threading
+import openpyxl
+
+class EmailSender: 
+    def __init__(self): 
+        self.root = Tk() 
+        self.root.title("Email Sender") 
+
+        # Email setup 
+        Label(self.root, text="Email Address:").grid(row=0, column=0) 
+        self.email_address = Entry(self.root) 
+        self.email_address.insert(0, "ladysmithveterinaryclinic@gmail.com")
+        self.email_address.grid(row=0, column=1) 
+
+        Label(self.root, text="Password:").grid(row=1, column=0) 
+        self.password = Entry(self.root, show="*")
+        self.password.insert(0, "lbupktmaqfpesnqj")
+        self.password.grid(row=1, column=1) 
+
+        # PDF folder selection 
+        Label(self.root, text="PDF Folder:").grid(row=2, column=0) 
+        self.pdf_folder = Button(self.root, text="Browse", command=self.select_pdf_folder) 
+        self.pdf_folder.grid(row=2, column=1) 
+
+        # Excel file selection 
+        Label(self.root, text="Excel File:").grid(row=3, column=0) 
+        self.excel_file = Button(self.root, text="Browse", command=self.select_excel_file) 
+        self.excel_file.grid(row=3, column=1) 
+
+        # SMTP server selection 
+        Label(self.root, text="SMTP Server:").grid(row=4, column=0) 
+        self.smtp_server = Entry(self.root) 
+        self.smtp_server.insert(0, "smtp.gmail.com") 
+        self.smtp_server.grid(row=4, column=1) 
+
+        # SMTP port selection 
+        Label(self.root, text="SMTP Port:").grid(row=5, column=0) 
+        self.smtp_port = Entry(self.root) 
+        self.smtp_port.insert(0, "587") 
+        self.smtp_port.grid(row=5, column=1) 
+
+        # Subject field 
+        Label(self.root, text="Subject:").grid(row=6, column=0) 
+        self.subject = Entry(self.root) 
+        self.subject.grid(row=6, column=1) 
+
+        # Email Body field 
+        Label(self.root, text="Email Body:").grid(row=7, column=0) 
+        self.email_body = Text(self.root, height=10, width=40) 
+        self.email_body.grid(row=8, column=0, columnspan=2) 
+
+        # Progress bar 
+        self.progress_bar = ttk.Progressbar(self.root, orient="horizontal", length=200, mode="determinate") 
+        self.progress_bar.grid(row=9, column=0, columnspan=2) 
+
+        # Send email button 
+        Button(self.root, text="Send Emails", command=self.start_sending_emails).grid(row=10, column=0, columnspan=2) 
+
+    def select_pdf_folder(self): 
+        self.pdf_folder_path = filedialog.askdirectory(title="Select Folder with PDF Files") 
+        self.pdf_folder.config(text=self.pdf_folder_path) 
+
+    def select_excel_file(self): 
+        self.excel_file_path = filedialog.askopenfilename(title="Select Excel File", filetypes=[("Excel files", "*.xlsx *.xls")]) 
+        self.excel_file.config(text=self.excel_file_path) 
+
+    def update_progress_bar(self, value):
+        self.progress_bar["value"] = value
+
+    def send_email(self, email_address, file, client_number, from_address, password, smtp_server, smtp_port): 
+        try: 
+            msg = EmailMessage() 
+            account_number = os.path.splitext(os.path.basename(file))[0] 
+            msg.set_content(self.email_body.get('1.0', 'end-1c')) 
+            msg['Subject'] = f"{self.subject.get()} - Account Number {account_number}" 
+            msg['From'] = from_address 
+            msg['To'] = email_address 
+
+            with open(file, 'rb') as f: 
+                msg.add_attachment(f.read(), maintype='application', subtype='pdf', filename=f"{client_number}.pdf") 
+
+            with smtplib.SMTP(smtp_server, int(smtp_port)) as smtp: 
+                smtp.starttls() 
+                smtp.login(msg['From'], password) 
+                recipients = [email_address] 
+                smtp.sendmail(from_address, recipients, msg.as_string()) 
+
+            return True 
+        except Exception as e: 
+            print(f"An error occurred: {e}") 
+            return False  
+
+    def send_emails(self): 
+        from_address = self.email_address.get() 
+        password = self.password.get() 
+        pdf_folder = self.pdf_folder_path 
+        excel_file = self.excel_file_path 
+        smtp_server = self.smtp_server.get() 
+        smtp_port = self.smtp_port.get() 
+
+        client_emails = pd.read_excel(excel_file).set_index('Client Number')['Email Address'].to_dict() 
+        email_status = [] 
+        total_emails = len([filename for filename in os.listdir(pdf_folder) if filename.endswith(".pdf")]) 
+        self.progress_bar["maximum"] = total_emails 
+
+        for index, filename in enumerate(os.listdir(pdf_folder)): 
+            if filename.endswith(".pdf"):   
+                client_number = os.path.splitext(filename)[0] 
+                email_address = client_emails.get(int(client_number)) 
+
+                if email_address: 
+                    file_path = os.path.join(pdf_folder, filename) 
+                    try: 
+                        if self.send_email(email_address, file_path, client_number, from_address, password, smtp_server, smtp_port): 
+                            email_status.append([client_number, email_address, "Sent"]) 
+                        else: 
+                            email_status.append([client_number, email_address, "Failed"]) 
+                    except Exception as e: 
+                        email_status.append([client_number, email_address, f"Failed: {e}"]) 
+                else: 
+                    email_status.append([client_number, "", "Client Not Found"]) 
+
+                self.root.after(0, self.update_progress_bar, index + 1) 
+
+        csv_file_path = filedialog.asksaveasfilename(title="Save Email Status", defaultextension=".csv", filetypes=[("CSV files", "*.csv")]) 
+        if csv_file_path: 
+            with open(csv_file_path, "w", newline="") as csvfile: 
+                writer = csv.writer(csvfile) 
+                writer.writerow(["Client Number", "Email Address", "Status"]) 
+                writer.writerows(email_status) 
+            messagebox.showinfo("Emails Sent", "Emails sent successfully!") 
+        else: 
+            messagebox.showerror("Error", "No file selected to save email status.") 
+
+    def start_sending_emails(self): 
+        threading.Thread(target=self.send_emails).start() 
+
+    def run(self): 
+        self.root.mainloop() 
+
+if __name__ == "__main__": 
+    app = EmailSender() 
+    app.run()
