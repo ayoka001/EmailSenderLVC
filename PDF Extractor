@@ -1,0 +1,276 @@
+import os
+import re
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+from PyPDF2 import PdfFileReader, PdfFileWriter
+
+def select_statements_file(statements_file_label):
+    file_path = filedialog.askopenfilename(filetypes=[("PDF Files", "*.pdf")])
+    if file_path:
+        statements_file_label.config(text=file_path)
+
+def select_invoices_file(invoices_file_label):
+    file_path = filedialog.askopenfilename(filetypes=[("PDF Files", "*.pdf")])
+    if file_path:
+        invoices_file_label.config(text=file_path)
+
+def select_output_dir(output_dir_label):
+    directory = filedialog.askdirectory()
+    if directory:
+        output_dir_label.config(text=directory)
+
+def select_statements_dir(statements_dir_label):
+    directory = filedialog.askdirectory()
+    if directory:
+        statements_dir_label.config(text=directory)
+
+def select_invoices_dir(invoices_dir_label):
+    directory = filedialog.askdirectory()
+    if directory:
+        invoices_dir_label.config(text=directory)
+
+def extract_statements_and_invoices(statements_pdf, invoices_pdf, output_dir, progress_bar):
+    try:
+        # Extract statements
+        statements_reader = PdfFileReader(open(statements_pdf, "rb"))
+        statements_total_pages = statements_reader.numPages
+
+        statements_dict = {}
+        current_client = None
+        current_pages = []
+
+        for i in range(statements_total_pages):
+            page = statements_reader.getPage(i)
+            text = page.extractText()
+
+            # Detect Client Number
+            match = re.search(r"\d{5}", text)
+            if match:
+                client_number = match.group()
+
+                # Validate client number range
+                if not (00000 <= int(client_number) <= 19999):
+                    print("Invalid client number: " + client_number + ". Skipping...")
+                    continue
+
+                # Save previous client statement
+                if current_client is not None and current_client != client_number:
+                    statements_dict[current_client] = current_pages
+                    current_pages = []
+
+                # Start new statement
+                current_client = client_number
+
+            current_pages.append(i)
+
+            progress_bar['value'] = (i + 1) / statements_total_pages * 50
+            progress_bar.update_idletasks()
+
+        # Save last statement
+        if current_client is not None and current_pages:
+            statements_dict[current_client] = current_pages
+
+        print("Statements:")
+        for client, pages in statements_dict.items():
+            print("Client " + client + ": " + str(len(pages)) + " pages")
+
+        # Write statements to new PDF files
+        statements_dir = os.path.join(output_dir, "Statements")
+        if not os.path.exists(statements_dir):
+            os.makedirs(statements_dir)
+
+        for client, pages in statements_dict.items():
+            try:
+                writer = PdfFileWriter()
+                for page_num in pages:
+                    writer.addPage(statements_reader.getPage(page_num))
+
+                output_file = os.path.join(statements_dir, client.lstrip('0') + ".pdf")
+                with open(output_file, "wb") as output_pdf:
+                    writer.write(output_pdf)
+                print("Statement saved for client " + client + ".")
+            except Exception as e:
+                print("Error saving statement for client " + client + ": " + str(e))
+
+        # Extract invoices
+        invoices_reader = PdfFileReader(open(invoices_pdf, "rb"))
+        invoices_total_pages = invoices_reader.numPages
+
+        invoices_dict = {}
+        current_invoice = None
+        current_pages = []
+
+        for i in range(invoices_total_pages):
+            page = invoices_reader.getPage(i)
+            text = page.extractText()
+
+            # Detect Invoice Number
+            match = re.search(r"Client No : (\d{5})", text)
+            if match:
+                invoice_number = match.group(1).lstrip('0')
+
+                # Validate invoice number range
+                if not (00000 <= int(invoice_number) <= 19999):
+                    print("Invalid invoice number: " + invoice_number + ". Skipping...")
+                    continue
+
+                # If this is a new invoice, save the previous one
+                if current_invoice is not None and current_invoice != invoice_number:
+                    invoices_dict[current_invoice] = current_pages
+                    current_pages = []
+
+                # Start new invoice
+                current_invoice = invoice_number
+
+            current_pages.append(i)
+
+            progress_bar['value'] = 50 + (i + 1) / invoices_total_pages * 50
+            progress_bar.update_idletasks()
+
+        # Save last invoice
+        if current_invoice is not None and current_pages:
+            invoices_dict[current_invoice] = current_pages
+
+        print("Invoices:")
+        for invoice, pages in invoices_dict.items():
+            print("Invoice " + invoice + ": " + str(len(pages)) + " pages")
+
+        # Write invoices to new PDF files
+        invoices_dir = os.path.join(output_dir, "Invoices")
+        if not os.path.exists(invoices_dir):
+            os.makedirs(invoices_dir)
+
+        for invoice, pages in invoices_dict.items():
+            try:
+                writer = PdfFileWriter()
+                for page_num in pages:
+                    writer.addPage(invoices_reader.getPage(page_num))
+
+                output_file = os.path.join(invoices_dir, invoice + ".pdf")
+                with open(output_file, "wb") as output_pdf:
+                    writer.write(output_pdf)
+                print("Invoice saved: " + invoice)
+            except Exception as e:
+                print("Error saving invoice " + invoice + ": " + str(e))
+
+        tk.messagebox.showinfo("Success", "Statements and invoices saved in " + output_dir)
+
+    except Exception as e:
+        print("An error occurred: " + str(e))
+        tk.messagebox.showerror("Error", "An error occurred: " + str(e))
+
+def merge_statements_and_invoices(statements_dir, invoices_dir, output_dir, progress_bar):
+    try:
+        # Get list of PDF files in statements directory
+        statements_files = [f for f in os.listdir(statements_dir) if f.endswith(".pdf")]
+
+        # Iterate through statements files
+        for i, statements_file in enumerate(statements_files):
+            try:
+                # Find corresponding invoice file
+                invoices_file = [f for f in os.listdir(invoices_dir) if f == statements_file]
+
+                if invoices_file:
+                    # Merge statements and invoices PDF files
+                    statements_path = os.path.join(statements_dir, statements_file)
+                    invoices_path = os.path.join(invoices_dir, invoices_file[0])
+                    output_file = os.path.join(output_dir, statements_file)
+
+                    # Open PDF files
+                    statements_reader = PdfFileReader(open(statements_path, "rb"))
+                    invoices_reader = PdfFileReader(open(invoices_path, "rb"))
+
+                    # Create a new PDF writer
+                    writer = PdfFileWriter()
+
+                    # Add pages from statements and invoices
+                    for page in statements_reader.pages:
+                        writer.addPage(page)
+                    for page in invoices_reader.pages:
+                        writer.addPage(page)
+
+                    # Save merged PDF
+                    with open(output_file, "wb") as output_pdf:
+                        writer.write(output_pdf)
+                    print("Merged PDF saved for " + statements_file)
+                else:
+                    print("No matching invoice file found for " + statements_file)
+
+                # Update progress bar
+                progress_bar['value'] = (i + 1) / len(statements_files) * 100
+                progress_bar.update_idletasks()
+            except Exception as e:
+                print("Error merging PDF for " + statements_file + ": " + str(e))
+
+        # Display completion message
+        tk.messagebox.showinfo("Success", "Merging completed successfully!")
+
+    except Exception as e:
+        print("An error occurred: " + str(e))
+        tk.messagebox.showerror("Error", "An error occurred: " + str(e))
+
+def create_merge_window():
+    merge_window = tk.Toplevel()
+    merge_window.title("Merge Statements and Invoices")
+
+    tk.Label(merge_window, text="Select the Statements Directory:").pack(pady=5)
+    statements_dir_label = tk.Label(merge_window, text="No directory selected", fg="gray")
+    statements_dir_label.pack(pady=5)
+    tk.Button(merge_window, text="Browse", command=lambda: select_statements_dir(statements_dir_label)).pack(pady=5)
+
+    tk.Label(merge_window, text="Select the Invoices Directory:").pack(pady=5)
+    invoices_dir_label = tk.Label(merge_window, text="No directory selected", fg="gray")
+    invoices_dir_label.pack(pady=5)
+    tk.Button(merge_window, text="Browse", command=lambda: select_invoices_dir(invoices_dir_label)).pack(pady=5)
+
+    tk.Label(merge_window, text="Select the Output Directory:").pack(pady=5)
+    output_dir_label = tk.Label(merge_window, text="No directory selected", fg="gray")
+    output_dir_label.pack(pady=5)
+    tk.Button(merge_window, text="Browse", command=lambda: select_output_dir(output_dir_label)).pack(pady=5)
+
+    progress_bar = ttk.Progressbar(merge_window, orient="horizontal", length=200, mode="determinate")
+    progress_bar.pack(pady=20)
+
+    tk.Button(merge_window, text="Merge Statements and Invoices",
+                command=lambda: merge_statements_and_invoices(statements_dir_label.cget("text"),
+                                                                    invoices_dir_label.cget("text"),
+                                                                    output_dir_label.cget("text"),
+                                                                    progress_bar)).pack(pady=20)
+
+    merge_window.grab_set()
+
+def main():
+    root = tk.Tk()
+    root.title("PDF Statements and Invoices Extractor")
+    root.geometry("600x350+100+100")
+
+    tk.Label(root, text="Select the Statements PDF File:").pack(pady=5)
+    statements_file_label = tk.Label(root, text="No file selected", fg="gray")
+    statements_file_label.pack(pady=5)
+    tk.Button(root, text="Browse", command=lambda: select_statements_file(statements_file_label)).pack(pady=5)
+
+    tk.Label(root, text="Select the Invoices PDF File:").pack(pady=5)
+    invoices_file_label = tk.Label(root, text="No file selected", fg="gray")
+    invoices_file_label.pack(pady=5)
+    tk.Button(root, text="Browse", command=lambda: select_invoices_file(invoices_file_label)).pack(pady=5)
+
+    tk.Label(root, text="Select the Output Directory:").pack(pady=5)
+    output_dir_label = tk.Label(root, text="No directory selected", fg="gray")
+    output_dir_label.pack(pady=5)
+    tk.Button(root, text="Browse", command=lambda: select_output_dir(output_dir_label)).pack(pady=5)
+
+    progress_bar = ttk.Progressbar(root, orient="horizontal", length=200, mode="determinate")
+    progress_bar.pack(pady=20)
+
+    tk.Button(root, text="Extract Statements and Invoices",
+                command=lambda: extract_statements_and_invoices(statements_file_label.cget("text"),
+                                                                    invoices_file_label.cget("text"),
+                                                                    output_dir_label.cget("text"),
+                                                                    progress_bar)).pack(pady=20)
+
+    tk.Button(root, text="Merge Statements and Invoices", command=create_merge_window).pack(pady=20)
+
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
